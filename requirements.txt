@@ -4,3 +4,13 @@ numpy
 scikit-learn
 matplotlib
 seaborn
+
+# ── Agent framework ───────────────────────────────────────────────────────────
+langgraph
+langchain-core
+
+# ── RAG pipeline (Developer 3) ────────────────────────────────────────────────
+sentence-transformers          # semantic embeddings (all-MiniLM-L6-v2 default)
+faiss-cpu                      # fast vector similarity search (falls back to NumPy)
+google-generativeai            # Gemini LLM summarisation (optional — needs GEMINI_API_KEY)
+openai                         # OpenAI GPT-4o summarisation (optional — needs OPENAI_API_KEY)
