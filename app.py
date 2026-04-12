@@ -8,9 +8,17 @@ import json
 
 # ── Path setup ──────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(__file__)
+sys.path.insert(0, ROOT)                               # expose rag/ package
 sys.path.insert(0, os.path.join(ROOT, "src", "ml"))
 from recommender import generate_recommendations
 from agent.diagnosis import run_diagnosis_node, DiagnosisReport
+
+# ── RAG retriever (Developer 3) ──────────────────────────────────────────────
+try:
+    from rag.retriever import retrieve_resources_for_gaps
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 MODEL_DIR = os.path.join(ROOT, "src", "ml", "models")
@@ -130,6 +138,84 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-radius: 999px;
     background: linear-gradient(90deg, #6366f1, #22d3ee);
 }
+
+/* ── Resource cards (RAG) ── */
+.resource-card {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: .75rem;
+    transition: border-color .2s;
+}
+.resource-card:hover { border-color: #6366f1; }
+.resource-card .rc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: .5rem;
+    margin-bottom: .45rem;
+}
+.resource-card .rc-title {
+    font-size: .95rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin: 0;
+}
+.resource-card .rc-title a {
+    color: #818cf8;
+    text-decoration: none;
+}
+.resource-card .rc-title a:hover { text-decoration: underline; }
+.resource-card .rc-summary {
+    font-size: .83rem;
+    color: #94a3b8;
+    margin: .35rem 0 .5rem 0;
+    line-height: 1.55;
+}
+.resource-card .rc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    align-items: center;
+}
+.rc-score-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    font-size: .75rem;
+    color: #64748b;
+}
+.rc-score-fill {
+    display: inline-block;
+    height: 5px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #6366f1, #22d3ee);
+}
+.rc-gap-group {
+    margin-bottom: 1.1rem;
+}
+.rc-gap-label {
+    font-size: .8rem;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    opacity: .5;
+    margin-bottom: .4rem;
+}
+/* ── RAG status pill ── */
+.rag-status {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    font-size: .78rem;
+    font-weight: 600;
+    padding: .2rem .65rem;
+    border-radius: 999px;
+    border: 1px solid;
+}
+.rag-on  { color: #34d399; background: #05190f; border-color: #34d39955; }
+.rag-off { color: #64748b; background: #1e293b; border-color: #33415555; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -243,6 +329,85 @@ def preprocess_raw_data(df, scaler, scale_cols):
 def _status_pill(label: str, color: str) -> str:
     return f'<span class="pill" style="background:{color}22;color:{color};border:1px solid {color}55;">{label}</span>'
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG RESOURCE RENDERER
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DOMAIN_ICON = {
+    "Mathematics": "📐",
+    "Science":     "🔬",
+    "English":     "📖",
+    "Attendance":  "🗓️",
+    "Study Time":  "⏱️",
+}
+
+def _render_resources(resources: list[dict]):
+    """Render RAG-retrieved resources grouped by learning gap."""
+    if not resources:
+        st.info("No resources retrieved — either no gaps were identified or RAG is disabled.", icon="📭")
+        return
+
+    # Group by gap area
+    from collections import defaultdict
+    grouped: dict = defaultdict(list)
+    for r in resources:
+        grouped[r.get("gap", "General")].append(r)
+
+    for gap_area, items in grouped.items():
+        sev      = items[0].get("severity", "Moderate")
+        sev_col  = SEVERITY_COLOR.get(sev, "#94a3b8")
+        area_icon = _DOMAIN_ICON.get(gap_area, "📚")
+
+        st.markdown(
+            f'<div class="rc-gap-label" style="color:{sev_col};">{area_icon} {gap_area} '
+            f'<span style="opacity:.6;font-weight:400;">({sev})</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        for r in items:
+            score     = float(r.get("score", 0))
+            score_pct = min(int(score * 100), 100)   # raw cosine → %
+            score_bar = (
+                f'<span class="rc-score-bar">'  
+                f'<span class="rc-score-fill" style="width:{score_pct}px;"></span>'
+                f'{score:.3f}</span>'
+            )
+
+            # Severity pill
+            sev_pill = (
+                f'<span class="pill" style="background:{sev_col}22;color:{sev_col};'
+                f'border:1px solid {sev_col}44;font-size:.7rem;">{sev}</span>'
+            )
+
+            title_html = (
+                f'<a href="{r["url"]}" target="_blank" rel="noopener noreferrer">'
+                f'{r["title"]}</a>'
+            )
+
+            st.markdown(
+                f"""
+                <div class="resource-card">
+                  <div class="rc-header">
+                    <p class="rc-title">{title_html}</p>
+                    <div style="white-space:nowrap;">{sev_pill}</div>
+                  </div>
+                  <p class="rc-summary">{r['summary']}</p>
+                  <div class="rc-meta">
+                    {score_bar}
+                    <span style="font-size:.73rem;color:#334155;">relevance score</span>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIAGNOSIS + RESOURCES RENDERER
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _render_diagnosis(report: DiagnosisReport, row_raw: pd.Series):
     """Render a full DiagnosisReport inside a rich Streamlit layout."""
