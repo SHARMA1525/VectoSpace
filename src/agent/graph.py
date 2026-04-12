@@ -8,10 +8,24 @@ def diagnose_node(state: AgentState):
     print("[Node] Executing diagnosis...")
     return {"learning_gaps": "Mocked learning gaps based on performance data."}
 
-# Developer 3 will implement the real RAG retrieval logic
+# --- REAL RAG RETRIEVAL NODE (Developer 3) ---
 def retrieve_node(state: AgentState):
-    print("[Node] Executing retrieval...")
-    return {"resources": [{"title": "Calculus 101", "url": "http://example.com/calc"}]}
+    """
+    Real Retrieval Node — delegates to rag.retriever.run_retrieval_node.
+
+    Reads state["learning_gaps"] (str | list[dict] | DiagnosisReport),
+    queries the vectorstore for relevant educational materials, and returns
+    a populated resources list for state["resources"].
+    """
+    print("[Node] Executing RAG retrieval...")
+    try:
+        from rag.retriever import run_retrieval_node
+        result = run_retrieval_node(state)
+        print(f"[Node] RAG retrieval complete — {len(result.get('resources', []))} resource(s) found.")
+        return result
+    except Exception as exc:
+        print(f"[Node] RAG retrieval failed ({exc}). Returning empty resources.")
+        return {"resources": []}
 
 # Developer 4 will implement the real planner logic
 def planner_node(state: AgentState):
