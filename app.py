@@ -224,7 +224,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 # ═══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🎓 VectoSpace")
-    st.caption("Student Performance · Diagnosis Engine")
+    st.caption("Student Performance · Diagnosis + RAG Engine")
     st.markdown("---")
 
     # ── LLM toggle ────────────────────────────────────────────────────────────
@@ -238,6 +238,36 @@ with st.sidebar:
         st.info("🤖 LLM mode — Gemini / GPT-4o will enrich the diagnosis.", icon="✨")
     else:
         st.info("📐 Rule-based mode — fast, deterministic, no API key needed.", icon="⚡")
+
+    st.markdown("---")
+
+    # ── RAG Resource Retrieval toggle ─────────────────────────────────────────
+    st.markdown("### 📚 Resource Retrieval (RAG)")
+    if RAG_AVAILABLE:
+        use_rag = st.toggle(
+            "Enable RAG Resource Retrieval",
+            value=True,
+            help="Retrieves personalised learning resources for each detected gap using semantic search over a curated educational corpus.",
+        )
+        rag_use_llm_summary = st.toggle(
+            "LLM-generated resource summaries",
+            value=False,
+            help="When enabled, uses Gemini/GPT-4o to write a tailored summary for each resource. Falls back to template if no API key is set.",
+        )
+        rag_top_k = st.slider(
+            "Resources per gap",
+            min_value=1, max_value=5, value=3,
+            help="Number of resources retrieved per learning gap.",
+        )
+        if use_rag:
+            st.markdown('<span class="rag-status rag-on">🟢 RAG Active</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="rag-status rag-off">⚪ RAG Disabled</span>', unsafe_allow_html=True)
+    else:
+        use_rag = False
+        rag_use_llm_summary = False
+        rag_top_k = 3
+        st.warning("⚠️ RAG package not found. Run `pip install -r requirements.txt` to enable resource retrieval.", icon="📦")
 
     st.markdown("---")
 
@@ -258,7 +288,8 @@ with st.sidebar:
     st.markdown("### 📂 About")
     st.markdown(
         "Upload a student CSV file to get **ML-powered grade predictions**, "
-        "**learning gap diagnosis**, and **personalised study recommendations**."
+        "**learning gap diagnosis**, **RAG-powered resource retrieval**, "
+        "and **personalised study recommendations**."
     )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -268,10 +299,10 @@ st.markdown("""
 <div style="padding:1.5rem 0 1rem 0;">
   <h1 style="margin:0;font-size:2rem;font-weight:700;">
     🎓 Student Performance Predictor
-    <span style="font-size:1rem;font-weight:400;opacity:.5;margin-left:.5rem;">+ Diagnosis Engine</span>
+    <span style="font-size:1rem;font-weight:400;opacity:.5;margin-left:.5rem;">+ Diagnosis · RAG Engine</span>
   </h1>
   <p style="opacity:.55;margin:.3rem 0 0 0;">
-    Upload student data · Get grade predictions · Identify learning gaps · Generate personalised actions
+    Upload student data · Get grade predictions · Identify learning gaps · Retrieve learning resources · Generate personalised actions
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -456,8 +487,8 @@ def _render_diagnosis(report: DiagnosisReport, row_raw: pd.Series):
     )
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    tab_gaps, tab_strengths, tab_actions, tab_raw = st.tabs(
-        ["🔴 Learning Gaps", "✅ Strengths", "🚀 Priority Actions", "📄 Raw Report"]
+    tab_gaps, tab_strengths, tab_actions, tab_resources, tab_raw = st.tabs(
+        ["🔴 Learning Gaps", "✅ Strengths", "🚀 Priority Actions", "📚 Resources", "📄 Raw Report"]
     )
 
     # ── Tab 1: Learning Gaps ──────────────────────────────────────────────────
@@ -511,7 +542,17 @@ def _render_diagnosis(report: DiagnosisReport, row_raw: pd.Series):
                 unsafe_allow_html=True,
             )
 
-    # ── Tab 4: Raw JSON ───────────────────────────────────────────────────────
+    # ── Tab 4: Resources (placeholder — filled by caller) ────────────────────
+    # The actual content is injected by the caller via st.session_state
+    # so that we can pass resources without re-running the Retrieval Node.
+    with tab_resources:
+        resources = st.session_state.get(f"_resources_{report.student_id}_{id(report)}", None)
+        if resources is None:
+            st.info("📡 Enable **RAG Resource Retrieval** in the sidebar and re-run diagnosis to see personalised resources here.", icon="📚")
+        else:
+            _render_resources(resources)
+
+    # ── Tab 5: Raw JSON ───────────────────────────────────────────────────────
     with tab_raw:
         report_dict = report.to_dict()
         st.json(report_dict, expanded=False)
@@ -730,7 +771,37 @@ with tab_search:
                     use_llm         = use_llm,
                 )
 
+            # ── RAG Retrieval ──────────────────────────────────────────────────
+            resources: list = []
+            if use_rag and RAG_AVAILABLE and report.learning_gaps:
+                with st.spinner("📡 Retrieving personalised learning resources…"):
+                    try:
+                        gaps_dicts = [g.to_dict() for g in report.learning_gaps]
+                        resources  = retrieve_resources_for_gaps(
+                            learning_gaps = gaps_dicts,
+                            use_llm       = rag_use_llm_summary,
+                            top_k         = rag_top_k,
+                        )
+                    except Exception as rag_err:
+                        st.warning(f"RAG retrieval encountered an error: {rag_err}", icon="⚠️")
+
+            # Store resources in session state so _render_diagnosis can find them
+            res_key = f"_resources_{report.student_id}_{id(report)}"
+            st.session_state[res_key] = resources if (use_rag and RAG_AVAILABLE) else None
+
             _render_diagnosis(report, row)
+
+            # ── RAG Resource count banner (outside tabs) ───────────────────────
+            if use_rag and RAG_AVAILABLE:
+                if resources:
+                    st.success(
+                        f"📚 **{len(resources)} learning resource(s)** retrieved for "
+                        f"{len(report.learning_gaps)} identified gap(s). "
+                        f"See the **Resources** tab above.",
+                        icon="✅",
+                    )
+                elif report.learning_gaps:
+                    st.info("RAG retrieval returned no results — try lowering the relevance threshold.", icon="📭")
 
             # ── Legacy recommendations (collapsible) ──────────────────────────
             with st.expander("💡 Quick Study Recommendations (rule-based)", expanded=False):
